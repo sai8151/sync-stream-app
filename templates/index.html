@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sync Stream</title>
+    <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
+    <script>
+        let ws;
+        let userId;
+        let partnerId;
+
+        let lastSentAction = null;
+        //let lastSentTime = -1;
+        const THROTTLE_TIME = 1000; // Minimum time (ms) between sending actions
+        //let pauseTime = 0;
+    </script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        button,
+        input {
+            margin: 5px;
+            padding: 5px 10px;
+        }
+
+        #videoPlayer {
+            width: 100%;
+            max-width: 800px;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Sync Stream App</h1>
+    <p id="userId"></p>
+    <button onclick="createId()">Create ID</button>
+
+    <h2>Connect to User</h2>
+    <input id="targetId" type="text" placeholder="Enter User ID to connect">
+    <button onclick="connectToUser()">Connect</button>
+
+    <h2>Video Player</h2>
+    <video id="videoPlayer" controls>
+        <source src="/media/sample.mp4" type="video/mp4">
+    </video>
+
+    <script>
+        const video = document.getElementById('videoPlayer');
+
+        function createId() {
+            fetch('/create_id', { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    userId = data.user_id;
+                    document.getElementById('userId').innerText = `Your ID: ${userId}`;
+                    initWebSocket();
+                })
+                .catch(error => console.error('Error creating ID:', error));
+        }
+
+        function connectToUser() {
+            const targetId = document.getElementById('targetId').value;
+            if (!targetId) {
+                alert('Please enter a user ID to connect to.');
+                return;
+            }
+
+            fetch('/connect', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ user_id: userId, target_id: targetId })
+            })
+                .then(response => response.json())
+                .then(data => console.log(data.status))
+                .catch(error => console.error('Error connecting to user:', error));
+        }
+
+        function initWebSocket() {
+            if (!userId) {
+                console.error('User ID not set. Please create an ID first.');
+                return;
+            }
+
+            ws = new WebSocket(`ws://${window.location.host}/ws/${userId}`);
+
+            ws.onopen = () => console.log('WebSocket connection opened');
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                console.log('Received WebSocket message:', data);
+
+                if (data.action === "connected") {
+                    partnerId = data.partner_id;
+                    console.log(`Connected to partner: ${partnerId}`);
+                } else if (data.action === "play") {
+                    video.currentTime = data.time;
+                    video.play();
+                } else if (data.action === "pause") {
+                    video.currentTime = data.time;
+                    video.pause();
+                } else if (data.action === "seek") {
+                    video.currentTime = data.time;
+                }
+
+                // Log the current state of the video
+                console.log('Video currentTime:', video.currentTime);
+                console.log('Video playback state:', video.paused ? 'paused' : 'playing');
+            };
+
+            ws.onclose = () => console.log('WebSocket connection closed');
+            ws.onerror = (error) => console.error('WebSocket error:', error);
+        }
+
+        function throttleSendVideoAction(action, time) {
+            const now = Date.now();
+            if (lastSentAction !== action || lastSentTime === -1 || now - lastSentTime > THROTTLE_TIME) {
+                sendVideoAction(action, time);
+                lastSentAction = action;
+                lastSentTime = now;
+            }
+        }
+
+        function sendVideoAction(action, time) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ action, time }));
+                console.log(`Sent ${action} action with currentTime: ${time}`);
+            } else {
+                console.error('WebSocket is not open.');
+            }
+        }
+
+        video.onplay = () => throttleSendVideoAction("play", video.currentTime);
+        video.onpause = () => throttleSendVideoAction("pause", video.currentTime);
+        video.onseeked = () => throttleSendVideoAction("seek", video.currentTime);
+        video.onseeking = () => throttleSendVideoAction("seek", video.currentTime);
+    </script>
+</body>
+
+</html>
